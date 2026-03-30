@@ -1,0 +1,11 @@
+<?php
+
+namespace {{ namespace }};
+
+final readonly class {{ class }}
+{
+    public function __construct()
+    {
+        //
+    }
+}
