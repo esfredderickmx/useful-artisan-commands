@@ -7,7 +7,7 @@ Requires **PHP 8.2+** and **Laravel 12 or 13**.
 ## Installation
 
 ```bash
-composer require esfredderick/useful-artisan-commands
+composer require esfredderick/useful-artisan-commands --dev
 ```
 
 Auto-discovery registers the commands automatically.
