@@ -44,12 +44,12 @@ php artisan make:data CreateUser
 |---|---|
 | `-f`, `--force` | Overwrite if file already exists |
 
-### `app:configure-database`
+### `app:config-db`
 
 Interactive prompt to configure PostgreSQL connection details in your `.env` file.
 
 ```bash
-php artisan app:configure-database
+php artisan app:config-db
 ```
 
 Prompts for host, port, database name, username, password, and migrations table. Supports `schema.table` notation for the migrations table.

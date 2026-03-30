@@ -12,12 +12,12 @@ use function Laravel\Prompts\outro;
 use function Laravel\Prompts\password;
 use function Laravel\Prompts\text;
 
-#[AsCommand(name: 'app:configure-database')]
+#[AsCommand(name: 'app:config-db')]
 class ConfigureDatabaseCommand extends Command
 {
     use InteractsWithEnvFile;
 
-    protected $name = 'app:configure-database';
+    protected $name = 'app:config-db';
 
     protected $description = 'Configure the PostgreSQL database connection';
 
