@@ -2,10 +2,11 @@
 
 namespace EsFredDerick\UsefulArtisanCommands;
 
-use Illuminate\Support\ServiceProvider;
 use EsFredDerick\UsefulArtisanCommands\Commands\ConfigureDatabaseCommand;
+use EsFredDerick\UsefulArtisanCommands\Commands\ConfigureSchemaDefaultsCommand;
 use EsFredDerick\UsefulArtisanCommands\Commands\MakeActionCommand;
 use EsFredDerick\UsefulArtisanCommands\Commands\MakeDataCommand;
+use Illuminate\Support\ServiceProvider;
 
 class UsefulArtisanCommandsServiceProvider extends ServiceProvider
 {
@@ -14,6 +15,7 @@ class UsefulArtisanCommandsServiceProvider extends ServiceProvider
         if ($this->app->runningInConsole()) {
             $this->commands([
                 ConfigureDatabaseCommand::class,
+                ConfigureSchemaDefaultsCommand::class,
                 MakeActionCommand::class,
                 MakeDataCommand::class,
             ]);

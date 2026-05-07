@@ -54,6 +54,30 @@ php artisan app:config-db
 
 Prompts for host, port, database name, username, password, and migrations table. Supports `schema.table` notation for the migrations table.
 
+### `schemas:config-defaults`
+
+Interactive prompt to configure PostgreSQL schema-qualified Laravel framework tables.
+
+```bash
+php artisan schemas:config-defaults
+```
+
+It can write values directly to config files or to a selected `.env*` file, ignoring `.env.example`.
+It also syncs starter migrations for schemas, users, password reset tokens, sessions, cache, cache locks, jobs, job batches, and failed jobs.
+
+Prefer running it when starting a new project, before migration history matters.
+
+| Option | Description |
+|---|---|
+| `-c`, `--clean-env` | After choosing config-file writes, remove managed schema table keys from local `.env*` files |
+
+The User model and factory are linked according to the host Laravel version:
+
+| Laravel | Model / factory link |
+|---|---|
+| 13+ | `#[UseFactory(...)]` and `#[UseModel(...)]` attributes |
+| 12 | `protected static function newFactory()` and typed factory `$model` property |
+
 ## Customizing Stubs
 
 Publish the stubs to customize the generated file templates:
