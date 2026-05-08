@@ -63,7 +63,7 @@ Interactive prompt to configure PostgreSQL connection details in your `.env` fil
 php artisan app:config-db
 ```
 
-Prompts for host, port, database name, username, password, and migrations table. Supports `schema.table` notation for the migrations table.
+Prompts for host, port, database name, username, and password. Before saving, it shows a review table and lets you correct selected fields. Use `schemas:config-defaults` to configure schema-qualified Laravel framework tables such as the migrations table.
 
 ### `schemas:config-defaults`
 
