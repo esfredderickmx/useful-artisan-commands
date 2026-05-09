@@ -73,6 +73,54 @@ it('syncs schema migrations and default laravel table migrations', function () {
         ->toContain("Schema::dropIfExists('async.work_failures'");
 });
 
+it('syncs the official starter kit two factor migration without teams', function () {
+    file_put_contents($this->basePath.'/database/migrations/2025_08_14_170933_add_two_factor_columns_to_users_table.php', twoFactorMigrationContents());
+
+    $result = $this->service->syncDefaultMigrations($this->basePath, qualifiedTables());
+
+    expect($result['schemas'])
+        ->toBe(['async', 'client', 'identity', 'state'])
+        ->and($result['missing_migrations'])
+        ->toBe([])
+        ->and(file_get_contents($this->basePath.'/database/migrations/2025_08_14_170933_add_two_factor_columns_to_users_table.php'))
+        ->toContain("Schema::table('client.application_users'");
+});
+
+it('syncs official starter kit team migrations without two factor', function () {
+    file_put_contents($this->basePath.'/database/migrations/2026_01_27_000001_create_teams_table.php', teamsMigrationContents());
+    file_put_contents($this->basePath.'/database/migrations/2026_01_27_000002_add_current_team_id_to_users_table.php', currentTeamMigrationContents());
+
+    $result = $this->service->syncDefaultMigrations($this->basePath, qualifiedTablesWithTeams());
+
+    expect($result['schemas'])
+        ->toBe(['async', 'client', 'identity', 'membership', 'state'])
+        ->and($result['missing_migrations'])
+        ->toBe([])
+        ->and(file_get_contents($this->basePath.'/database/migrations/2026_01_27_000001_create_teams_table.php'))
+        ->toContain("Schema::create('membership.workspaces'")
+        ->toContain("Schema::create('membership.workspace_users'")
+        ->toContain("Schema::create('membership.workspace_invitations'")
+        ->toContain("Schema::dropIfExists('membership.workspace_invitations'")
+        ->toContain("->constrained('membership.workspaces')")
+        ->toContain("->constrained('client.application_users')")
+        ->and(file_get_contents($this->basePath.'/database/migrations/2026_01_27_000002_add_current_team_id_to_users_table.php'))
+        ->toContain("Schema::table('client.application_users'")
+        ->toContain("->constrained('membership.workspaces')");
+});
+
+it('reads current team tables from the starter kit team migration', function () {
+    file_put_contents($this->basePath.'/database/migrations/2026_01_27_000001_create_teams_table.php', teamsMigrationContents());
+
+    expect($this->service->hasTeamStarterMigrations($this->basePath))
+        ->toBeTrue()
+        ->and($this->service->currentTeamQualifiedTables($this->basePath))
+        ->toBe([
+            'teams' => 'teams',
+            'team_members' => 'team_members',
+            'team_invitations' => 'team_invitations',
+        ]);
+});
+
 it('syncs user model and factory with laravel 13 factory attributes', function () {
     $result = $this->service->syncUserModel($this->basePath, 'authentication.users', 13);
 
@@ -126,6 +174,16 @@ function qualifiedTables(): array
         'cache_locks' => 'state.cache_mutexes',
         'sessions' => 'identity.browser_sessions',
         'password_reset_tokens' => 'identity.reset_tokens',
+    ];
+}
+
+function qualifiedTablesWithTeams(): array
+{
+    return [
+        ...qualifiedTables(),
+        'teams' => 'membership.workspaces',
+        'team_members' => 'membership.workspace_users',
+        'team_invitations' => 'membership.workspace_invitations',
     ];
 }
 
@@ -384,6 +442,127 @@ return new class extends Migration
         Schema::dropIfExists('queue.jobs');
         Schema::dropIfExists('queue.job_batches');
         Schema::dropIfExists('queue.failed_jobs');
+    }
+};
+PHP;
+}
+
+function twoFactorMigrationContents(): string
+{
+    return <<<'PHP'
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::table('users', function (Blueprint $table) {
+            $table->text('two_factor_secret')->after('password')->nullable();
+            $table->text('two_factor_recovery_codes')->after('two_factor_secret')->nullable();
+            $table->timestamp('two_factor_confirmed_at')->after('two_factor_recovery_codes')->nullable();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::table('users', function (Blueprint $table) {
+            $table->dropColumn([
+                'two_factor_secret',
+                'two_factor_recovery_codes',
+                'two_factor_confirmed_at',
+            ]);
+        });
+    }
+};
+PHP;
+}
+
+function teamsMigrationContents(): string
+{
+    return <<<'PHP'
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('teams', function (Blueprint $table) {
+            $table->id();
+            $table->string('name');
+            $table->string('slug')->unique();
+            $table->boolean('is_personal')->default(false);
+            $table->timestamps();
+            $table->softDeletes();
+        });
+
+        Schema::create('team_members', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('team_id')->constrained()->cascadeOnDelete();
+            $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+            $table->string('role');
+            $table->timestamps();
+
+            $table->unique(['team_id', 'user_id']);
+        });
+
+        Schema::create('team_invitations', function (Blueprint $table) {
+            $table->id();
+            $table->string('code', 64)->unique();
+            $table->foreignId('team_id')->constrained()->cascadeOnDelete();
+            $table->string('email');
+            $table->string('role');
+            $table->foreignId('invited_by')->constrained('users')->cascadeOnDelete();
+            $table->timestamp('expires_at')->nullable();
+            $table->timestamp('accepted_at')->nullable();
+            $table->timestamps();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('team_invitations');
+        Schema::dropIfExists('team_members');
+        Schema::dropIfExists('teams');
+    }
+};
+PHP;
+}
+
+function currentTeamMigrationContents(): string
+{
+    return <<<'PHP'
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::table('users', function (Blueprint $table) {
+            $table->foreignId('current_team_id')
+                ->nullable()
+                ->after('password')
+                ->constrained('teams')
+                ->nullOnDelete();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::table('users', function (Blueprint $table) {
+            $table->dropConstrainedForeignId('current_team_id');
+        });
     }
 };
 PHP;

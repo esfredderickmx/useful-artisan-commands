@@ -127,6 +127,38 @@ class SchemaDefaultsConfigurationService
     }
 
     /**
+     * @return array{label: string, default_schema: string}
+     */
+    public function teamTableSchemaSetting(): array
+    {
+        return [
+            'label' => 'Team tables schema name',
+            'default_schema' => 'teams',
+        ];
+    }
+
+    /**
+     * @return array<string, array{label: string, default_table: string}>
+     */
+    public function teamTableSettings(): array
+    {
+        return [
+            'teams' => [
+                'label' => 'Teams table name',
+                'default_table' => 'teams',
+            ],
+            'team_members' => [
+                'label' => 'Team members table name',
+                'default_table' => 'team_members',
+            ],
+            'team_invitations' => [
+                'label' => 'Team invitations table name',
+                'default_table' => 'team_invitations',
+            ],
+        ];
+    }
+
+    /**
      * @return array<string, array{default_table: string}>
      */
     public function managedMigrationTableSettings(): array
@@ -136,6 +168,10 @@ class SchemaDefaultsConfigurationService
             ...array_map(
                 static fn (array $setting): array => ['default_table' => $setting['default_table']],
                 $this->tableSettings(),
+            ),
+            ...array_map(
+                static fn (array $setting): array => ['default_table' => $setting['default_table']],
+                $this->teamTableSettings(),
             ),
         ];
     }
@@ -313,6 +349,48 @@ class SchemaDefaultsConfigurationService
         return $this->defaultQualifiedTable('users');
     }
 
+    public function hasTeamStarterMigrations(string $basePath): bool
+    {
+        foreach ([
+            '*_create_teams_table.php',
+            '*_add_current_team_id_to_users_table.php',
+        ] as $pattern) {
+            if ((glob($basePath.'/database/migrations/'.$pattern) ?: []) !== []) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function currentTeamQualifiedTables(string $basePath): array
+    {
+        $tables = array_map(
+            static fn (array $setting): string => $setting['default_table'],
+            $this->teamTableSettings(),
+        );
+
+        foreach (glob($basePath.'/database/migrations/*_create_teams_table.php') ?: [] as $path) {
+            preg_match_all('/Schema::create\(\s*\'([^\']+)\'/', file_get_contents($path) ?: '', $matches);
+
+            foreach ($matches[1] as $index => $table) {
+                $managedKey = $this->managedKeyForMigrationTable($table)
+                    ?? (['teams', 'team_members', 'team_invitations'][$index] ?? null);
+
+                if ($managedKey === null || ! array_key_exists($managedKey, $tables)) {
+                    continue;
+                }
+
+                $tables[$managedKey] = $table;
+            }
+        }
+
+        return $tables;
+    }
+
     /**
      * @return array{from: string|null, to: string, namespace: string, removed_directories: array<int, string>}
      */
@@ -410,11 +488,13 @@ class SchemaDefaultsConfigurationService
         $omittedTables = [];
         $missingMigrations = [];
 
-        foreach ($this->defaultLaravelTableMigrationPatterns() as $pattern) {
+        foreach ($this->defaultLaravelTableMigrationPatterns() as $pattern => $required) {
             $files = glob($basePath.'/database/migrations/'.$pattern) ?: [];
 
             if ($files === []) {
-                $missingMigrations[] = $pattern;
+                if ($required) {
+                    $missingMigrations[] = $pattern;
+                }
 
                 continue;
             }
@@ -425,9 +505,20 @@ class SchemaDefaultsConfigurationService
                 $statementIndex = 0;
                 $seenOmitted = [];
                 $seenUpdated = [];
+                $recordUpdatedTable = function (string $qualifiedTable) use ($path, &$seenUpdated, &$updatedTables): void {
+                    if (isset($seenUpdated[$qualifiedTable])) {
+                        return;
+                    }
+
+                    $updatedTables[] = [
+                        'file' => basename($path),
+                        'table' => $qualifiedTable,
+                    ];
+                    $seenUpdated[$qualifiedTable] = true;
+                };
                 $contents = preg_replace_callback(
-                    '/(Schema::(?:create|dropIfExists)\(\s*)\'([^\']+)\'/',
-                    function (array $matches) use ($path, $qualifiedTables, $expectedKeys, &$statementIndex, &$seenOmitted, &$seenUpdated, &$omittedTables, &$updatedTables): string {
+                    '/(Schema::(?:create|table|dropIfExists)\(\s*)\'([^\']+)\'/',
+                    function (array $matches) use ($path, $qualifiedTables, $expectedKeys, &$statementIndex, &$seenOmitted, &$omittedTables, $recordUpdatedTable): string {
                         $managedKey = $this->managedKeyForMigrationTable($matches[2])
                             ?? $expectedKeys[$statementIndex % count($expectedKeys)];
                         $statementIndex++;
@@ -445,14 +536,7 @@ class SchemaDefaultsConfigurationService
                         }
 
                         $qualifiedTable = $qualifiedTables[$managedKey];
-
-                        if (! isset($seenUpdated[$qualifiedTable])) {
-                            $updatedTables[] = [
-                                'file' => basename($path),
-                                'table' => $qualifiedTable,
-                            ];
-                            $seenUpdated[$qualifiedTable] = true;
-                        }
+                        $recordUpdatedTable($qualifiedTable);
 
                         return "{$matches[1]}'{$qualifiedTable}'";
                     },
@@ -462,6 +546,8 @@ class SchemaDefaultsConfigurationService
                 if ($contents === null) {
                     throw new RuntimeException('Unable to update default Laravel table migration ['.basename($path).'].');
                 }
+
+                $contents = $this->updateConstrainedTablesInMigration($contents, $qualifiedTables, $recordUpdatedTable);
 
                 file_put_contents($path, $contents);
             }
@@ -507,14 +593,17 @@ class SchemaDefaultsConfigurationService
     }
 
     /**
-     * @return array<int, string>
+     * @return array<string, bool>
      */
     private function defaultLaravelTableMigrationPatterns(): array
     {
         return [
-            '*_create_users_table.php',
-            '*_create_cache_table.php',
-            '*_create_jobs_table.php',
+            '*_create_users_table.php' => true,
+            '*_add_two_factor_columns_to_users_table.php' => false,
+            '*_create_teams_table.php' => false,
+            '*_add_current_team_id_to_users_table.php' => false,
+            '*_create_cache_table.php' => true,
+            '*_create_jobs_table.php' => true,
         ];
     }
 
@@ -538,9 +627,52 @@ class SchemaDefaultsConfigurationService
     {
         return match (true) {
             str_ends_with($migrationFile, '_create_users_table.php') => ['users', 'password_reset_tokens', 'sessions'],
+            str_ends_with($migrationFile, '_add_two_factor_columns_to_users_table.php') => ['users'],
+            str_ends_with($migrationFile, '_create_teams_table.php') => ['teams', 'team_members', 'team_invitations', 'team_invitations', 'team_members', 'teams'],
+            str_ends_with($migrationFile, '_add_current_team_id_to_users_table.php') => ['users'],
             str_ends_with($migrationFile, '_create_cache_table.php') => ['cache', 'cache_locks'],
             str_ends_with($migrationFile, '_create_jobs_table.php') => ['jobs', 'job_batches', 'failed_jobs'],
             default => [null],
+        };
+    }
+
+    /**
+     * @param  array<string, string>  $qualifiedTables
+     * @param  callable(string): void  $recordUpdatedTable
+     */
+    private function updateConstrainedTablesInMigration(string $contents, array $qualifiedTables, callable $recordUpdatedTable): string
+    {
+        $contents = preg_replace_callback(
+            '/(\$table->foreignId\(\s*\'([^\']+)\'\s*\)(?:(?!;).)*?->constrained\(\s*)(?:\'([^\']+)\'\s*)?(\))/s',
+            function (array $matches) use ($qualifiedTables, $recordUpdatedTable): string {
+                $managedKey = $this->managedKeyForForeignIdColumn($matches[2])
+                    ?? (isset($matches[3]) ? $this->managedKeyForMigrationTable($matches[3]) : null);
+
+                if ($managedKey === null || ! array_key_exists($managedKey, $qualifiedTables)) {
+                    return $matches[0];
+                }
+
+                $qualifiedTable = $qualifiedTables[$managedKey];
+                $recordUpdatedTable($qualifiedTable);
+
+                return "{$matches[1]}'{$qualifiedTable}'{$matches[4]}";
+            },
+            $contents,
+        );
+
+        if ($contents === null) {
+            throw new RuntimeException('Unable to update foreign key constraints in starter migrations.');
+        }
+
+        return $contents;
+    }
+
+    private function managedKeyForForeignIdColumn(string $column): ?string
+    {
+        return match ($column) {
+            'team_id', 'current_team_id' => 'teams',
+            'user_id', 'invited_by' => 'users',
+            default => null,
         };
     }
 

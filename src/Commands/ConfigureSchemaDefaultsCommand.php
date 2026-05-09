@@ -58,6 +58,7 @@ class ConfigureSchemaDefaultsCommand extends Command
             hint: 'Env files keep config portable. Config files bake the values into the starter kit defaults.',
         );
         $target = $targetChoice === 'config' ? 'Config files' : 'Env file';
+        $hasTeamMigrations = $this->schemaDefaults->hasTeamStarterMigrations($this->basePath());
 
         $usersInAuthenticationSchema = select(
             label: 'Should the users table live in the authentication schema too?',
@@ -70,7 +71,20 @@ class ConfigureSchemaDefaultsCommand extends Command
         ) === 'yes';
 
         $envFile = $target === 'Env file' ? $this->selectEnvFile() : '.env';
-        $currentTables = $this->currentQualifiedTables($envFile, $target);
+        $currentTables = $this->currentQualifiedTables($envFile, $target, $hasTeamMigrations);
+        $teamsInUsersSchema = true;
+
+        if ($hasTeamMigrations) {
+            $teamsInUsersSchema = select(
+                label: 'Where should the team tables live?',
+                options: [
+                    'users' => 'Same schema as users',
+                    'separate' => 'Separate team schema',
+                ],
+                default: $this->defaultTeamSchemaPlacement($currentTables),
+                hint: 'Same follows the final users schema, including when users share the authentication schema.',
+            ) === 'users';
+        }
 
         $schemaNames = [];
 
@@ -90,6 +104,17 @@ class ConfigureSchemaDefaultsCommand extends Command
                     default: $this->schemaDefaults->userTableSetting()['default_schema'],
                 ),
                 hint: 'This schema controls where the User model table lives.',
+            );
+        }
+
+        if ($hasTeamMigrations && ! $teamsInUsersSchema) {
+            $schemaNames['teams'] = $this->askIdentifier(
+                label: $this->schemaDefaults->teamTableSchemaSetting()['label'],
+                default: $this->schemaDefaults->schemaNameFromQualifiedTable(
+                    qualifiedTable: $currentTables['teams'],
+                    default: $this->schemaDefaults->teamTableSchemaSetting()['default_schema'],
+                ),
+                hint: 'This schema controls teams, team members, and team invitations.',
             );
         }
 
@@ -120,13 +145,35 @@ class ConfigureSchemaDefaultsCommand extends Command
                 default: $this->schemaDefaults->userTableSetting()['default_table'],
             );
 
+        if ($hasTeamMigrations) {
+            foreach ($this->schemaDefaults->teamTableSettings() as $key => $setting) {
+                $default = $this->schemaDefaults->tableNameFromQualifiedTable(
+                    qualifiedTable: $currentTables[$key],
+                    default: $setting['default_table'],
+                );
+
+                $tableNames[$key] = $configureTables
+                    ? $this->askIdentifier($setting['label'], $default, 'Use the table name only, without the schema prefix.')
+                    : $default;
+            }
+        }
+
         $qualifiedTables = [];
 
         foreach ($this->schemaDefaults->tableSettings() as $key => $setting) {
             $qualifiedTables[$key] = $schemaNames[$setting['schema_group']].'.'.$tableNames[$key];
         }
 
-        $qualifiedTables['users'] = ($usersInAuthenticationSchema ? $schemaNames['authentication'] : $schemaNames['users']).'.'.$tableNames['users'];
+        $userSchema = $usersInAuthenticationSchema ? $schemaNames['authentication'] : $schemaNames['users'];
+        $qualifiedTables['users'] = $userSchema.'.'.$tableNames['users'];
+
+        if ($hasTeamMigrations) {
+            $teamSchema = $teamsInUsersSchema ? $userSchema : $schemaNames['teams'];
+
+            foreach ($this->schemaDefaults->teamTableSettings() as $key => $setting) {
+                $qualifiedTables[$key] = $teamSchema.'.'.$tableNames[$key];
+            }
+        }
 
         table(
             headers: ['Setting', 'Table'],
@@ -226,7 +273,7 @@ class ConfigureSchemaDefaultsCommand extends Command
     /**
      * @return array<string, string>
      */
-    private function currentQualifiedTables(string $envFile, string $target): array
+    private function currentQualifiedTables(string $envFile, string $target, bool $includeTeamTables = false): array
     {
         $tables = [];
 
@@ -242,6 +289,13 @@ class ConfigureSchemaDefaultsCommand extends Command
         }
 
         $tables['users'] = $this->schemaDefaults->currentUserQualifiedTable($this->basePath());
+
+        if ($includeTeamTables) {
+            $tables = [
+                ...$tables,
+                ...$this->schemaDefaults->currentTeamQualifiedTables($this->basePath()),
+            ];
+        }
 
         return $tables;
     }
@@ -263,6 +317,23 @@ class ConfigureSchemaDefaultsCommand extends Command
         }
 
         return $this->schemaDefaults->schemaGroups()[$group]['default'];
+    }
+
+    /**
+     * @param  array<string, string>  $currentTables
+     */
+    private function defaultTeamSchemaPlacement(array $currentTables): string
+    {
+        $userSchema = $this->schemaDefaults->schemaNameFromQualifiedTable(
+            qualifiedTable: $currentTables['users'],
+            default: $this->schemaDefaults->userTableSetting()['default_schema'],
+        );
+        $teamSchema = $this->schemaDefaults->schemaNameFromQualifiedTable(
+            qualifiedTable: $currentTables['teams'],
+            default: $userSchema,
+        );
+
+        return $teamSchema === $userSchema ? 'users' : 'separate';
     }
 
     private function askIdentifier(string $label, string $default, string $hint = ''): string

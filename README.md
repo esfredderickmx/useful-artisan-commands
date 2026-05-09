@@ -74,7 +74,7 @@ php artisan schemas:config-defaults
 ```
 
 It can write values directly to config files or to a selected `.env*` file, ignoring `.env.example`.
-It also syncs starter migrations for schemas, users, password reset tokens, sessions, cache, cache locks, jobs, job batches, and failed jobs.
+It also syncs starter migrations for schemas, users, password reset tokens, sessions, cache, cache locks, jobs, job batches, failed jobs, and optional starter-kit two-factor/team tables.
 
 Prefer running it when starting a new project, before migration history matters.
 
